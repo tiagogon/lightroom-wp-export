@@ -5,7 +5,7 @@ local LrFileUtils     = import "LrFileUtils"
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
 
-local JSON  = require "JSON"
+local JSON  = require "PluginJSON"
 local Utils = require "Utils"
 
 local WordPressAPI = {}

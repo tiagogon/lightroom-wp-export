@@ -12,7 +12,7 @@ logger:enable("logfile")
 
 local WordPressAPI = require "WordPressAPI"
 local Utils        = require "Utils"
-local JSON         = require "JSON"
+local JSON         = require "PluginJSON"
 
 --------------------------------------------------------------------------------
 -- Export Service Provider table
