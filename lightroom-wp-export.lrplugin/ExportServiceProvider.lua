@@ -12,7 +12,7 @@ logger:enable("logfile")
 
 local WordPressAPI = require "WordPressAPI"
 local Utils        = require "Utils"
-local JSON         = require "PluginJSON"
+
 
 --------------------------------------------------------------------------------
 -- Export Service Provider table
@@ -79,7 +79,7 @@ local function postTypeMenuItems(postTypesJson)
         return { { title = "(connect first)", value = "post" } }
     end
 
-    local types = JSON.decode(postTypesJson)
+    local types = Utils.jsonDecode(postTypesJson)
     if not types or #types == 0 then
         return { { title = "(connect first)", value = "post" } }
     end
@@ -97,7 +97,7 @@ local function searchResultMenuItems(resultsJson)
         return { { title = "(search for a post)", value = 0 } }
     end
 
-    local results = JSON.decode(resultsJson)
+    local results = Utils.jsonDecode(resultsJson)
     if not results or #results == 0 then
         return { { title = "(no results)", value = 0 } }
     end
@@ -123,7 +123,7 @@ local function updateSelectedPostInfo(propertyTable)
         return
     end
 
-    local results = JSON.decode(resultsJson)
+    local results = Utils.jsonDecode(resultsJson)
     if not results then return end
 
     for _, r in ipairs(results) do
@@ -218,7 +218,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     propertyTable.wp_appPassword
                                 )
                                 if types then
-                                    propertyTable.wp_postTypes = JSON.encode(types)
+                                    propertyTable.wp_postTypes = Utils.jsonEncode(types)
                                 end
                             else
                                 propertyTable.wp_connectionStatus = "✗ " .. (err or "Unknown error")
@@ -353,7 +353,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     return
                                 end
 
-                                local postTypes = JSON.decode(typesJson)
+                                local postTypes = Utils.jsonDecode(typesJson)
                                 local results = WordPressAPI.searchPosts(
                                     propertyTable.wp_siteUrl,
                                     propertyTable.wp_username,
@@ -362,7 +362,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     postTypes
                                 )
 
-                                propertyTable.wp_searchResults = JSON.encode(results)
+                                propertyTable.wp_searchResults = Utils.jsonEncode(results)
                                 if #results > 0 then
                                     propertyTable.wp_selectedPostId = results[1].id
                                     updateSelectedPostInfo(propertyTable)
@@ -496,7 +496,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     if isNewPost then
         -- Look up the rest_base for the selected post type
         local postTypesJson = exportSettings.wp_postTypes
-        local postTypes = JSON.decode(postTypesJson) or {}
+        local postTypes = Utils.jsonDecode(postTypesJson) or {}
         local selectedType = exportSettings.wp_postType or "post"
         postRestBase = "posts" -- default
 
@@ -538,14 +538,14 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
 
         -- Determine rest_base from search results
         local resultsJson = exportSettings.wp_searchResults
-        local results = JSON.decode(resultsJson) or {}
+        local results = Utils.jsonDecode(resultsJson) or {}
         postRestBase = "posts"
 
         for _, r in ipairs(results) do
             if r.id == postId then
                 -- Look up rest_base from post types
                 local postTypesJson = exportSettings.wp_postTypes
-                local postTypes = JSON.decode(postTypesJson) or {}
+                local postTypes = Utils.jsonDecode(postTypesJson) or {}
                 for _, pt in ipairs(postTypes) do
                     if pt.value == r.typeSlug then
                         postRestBase = pt.restBase

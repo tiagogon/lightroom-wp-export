@@ -5,7 +5,6 @@ local LrFileUtils     = import "LrFileUtils"
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
 
-local JSON  = require "PluginJSON"
 local Utils = require "Utils"
 
 local WordPressAPI = {}
@@ -36,7 +35,7 @@ local function parseJson(body)
         return nil, "Empty response"
     end
 
-    local decoded = JSON.decode(body)
+    local decoded = Utils.jsonDecode(body)
     if not decoded then
         return nil, "Failed to parse JSON"
     end
@@ -80,7 +79,7 @@ function WordPressAPI.apiPost(siteUrl, path, username, appPassword, postBody)
     local url = endpointUrl(siteUrl, path)
     logger:trace("POST " .. url)
 
-    local jsonBody = JSON.encode(postBody)
+    local jsonBody = Utils.jsonEncode(postBody)
     local headers = {
         { field = "Authorization", value = authHeader(username, appPassword) },
         { field = "Content-Type",  value = "application/json" },
