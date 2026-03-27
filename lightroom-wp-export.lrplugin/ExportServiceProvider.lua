@@ -636,26 +636,19 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
 
             logger:trace("Uploading " .. filename .. " (menu_order: " .. menuOrder .. ")")
 
-            local ok, result = pcall(function()
-                return WordPressAPI.uploadMedia(
-                    siteUrl, username, appPassword,
-                    pathOrMessage, postId, menuOrder, filename
-                )
-            end)
+            local result, uploadErr = WordPressAPI.uploadMedia(
+                siteUrl, username, appPassword,
+                pathOrMessage, postId, menuOrder, filename
+            )
 
-            if ok and result then
+            if result then
                 successes[#successes + 1] = {
                     id       = result.id,
                     filename = filename,
                 }
                 logger:trace("Success: " .. filename .. " → media ID " .. result.id)
             else
-                local errMsg = "Unknown error"
-                if not ok then
-                    errMsg = tostring(result) -- pcall error message
-                elseif type(result) == "string" then
-                    errMsg = result
-                end
+                local errMsg = uploadErr or "Unknown error"
                 failures[#failures + 1] = {
                     filename = filename,
                     error    = errMsg,
