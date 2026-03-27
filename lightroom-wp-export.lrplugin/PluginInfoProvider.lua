@@ -6,9 +6,6 @@ local LrBinding = import "LrBinding"
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
 
-local WordPressAPI = require "WordPressAPI"
-local Utils        = require "Utils"
-
 local PluginInfoProvider = {}
 
 function PluginInfoProvider.sectionsForTopOfDialog(f, prefs)
@@ -17,16 +14,7 @@ function PluginInfoProvider.sectionsForTopOfDialog(f, prefs)
     return {
         {
             title = "WordPress Connection",
-            synopsis = LrView.bind {
-                keys  = { "wp_siteUrl", "wp_connectionStatus" },
-                operation = function(binding, values)
-                    local status = values.wp_connectionStatus
-                    if status and status ~= "" then return status end
-                    local url = values.wp_siteUrl
-                    if url and url ~= "" then return url end
-                    return "Not configured"
-                end,
-            },
+            synopsis = LrView.bind { key = "wp_connectionStatus", object = prefs },
 
             f:row {
                 f:static_text {
@@ -96,6 +84,8 @@ function PluginInfoProvider.sectionsForTopOfDialog(f, prefs)
                     title  = "Test Connection",
                     action = function()
                         LrTasks.startAsyncTask(function()
+                            local WordPressAPI = require "WordPressAPI"
+                            local Utils        = require "Utils"
                             logger:trace("Testing connection to " .. tostring(prefs.wp_siteUrl))
                             prefs.wp_connectionStatus = "Connecting..."
                             local name, err = WordPressAPI.testConnection(
