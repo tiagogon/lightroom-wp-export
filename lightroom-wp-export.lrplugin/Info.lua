@@ -6,8 +6,6 @@ return {
     LrPluginName         = "WordPress Upload",
     LrPluginInfoUrl      = "https://github.com/tiagogon/lightroom-wp-export",
 
-    LrPluginInfoProvider = "PluginInfoProvider.lua",
-
     LrExportServiceProvider = {
         title = "WordPress Upload",
         file  = "ExportServiceProvider.lua",

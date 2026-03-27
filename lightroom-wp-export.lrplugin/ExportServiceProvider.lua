@@ -6,15 +6,12 @@ local LrProgressScope = import "LrProgressScope"
 local LrPathUtils     = import "LrPathUtils"
 local LrHttp          = import "LrHttp"
 local LrColor         = import "LrColor"
-local LrPrefs         = import "LrPrefs"
 
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
 
 local WordPressAPI = require "WordPressAPI"
 local Utils        = require "Utils"
-
-local prefs = LrPrefs.prefsForPlugin()
 
 
 --------------------------------------------------------------------------------
@@ -33,6 +30,10 @@ exportServiceProvider.allowColorSpaces = nil -- allow all
 
 --- Default export preset values. These are saved/restored with presets.
 exportServiceProvider.exportPresetFields = {
+    { key = "wp_siteUrl",        default = "" },
+    { key = "wp_username",       default = "" },
+    { key = "wp_appPassword",    default = "" },
+
     { key = "wp_destination",     default = "new" }, -- "new" or "existing"
 
     { key = "wp_postType",        default = "post" },
@@ -49,6 +50,8 @@ exportServiceProvider.exportPresetFields = {
 
     -- Internal state (not user-visible, but stored)
     { key = "wp_searchResults",   default = "" }, -- JSON-encoded array
+    { key = "wp_connectionStatus", default = "" },
+    { key = "wp_postTypes",       default = "" }, -- JSON-encoded post types
 }
 
 --------------------------------------------------------------------------------
@@ -79,24 +82,6 @@ local function getCollectionName()
     return ""
 end
 
---- Build popup menu items from post types stored in plugin prefs.
-local function postTypeMenuItems()
-    local postTypesJson = prefs.wp_postTypes
-    if not postTypesJson or postTypesJson == "" then
-        return { { title = "(configure in Plug-in Manager)", value = "post" } }
-    end
-
-    local types = Utils.jsonDecode(postTypesJson)
-    if not types or #types == 0 then
-        return { { title = "(configure in Plug-in Manager)", value = "post" } }
-    end
-
-    local items = {}
-    for _, t in ipairs(types) do
-        items[#items + 1] = { title = t.title, value = t.value }
-    end
-    return items
-end
 
 --- Build popup menu items from search results JSON string.
 local function searchResultMenuItems(resultsJson)
@@ -155,30 +140,114 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
         propertyTable.wp_postTitle = getCollectionName()
     end
 
-    -- Build connection status message from plugin prefs
-    local connectionMsg
-    local connStatus = prefs.wp_connectionStatus
-    if connStatus and connStatus ~= "" and connStatus:find("\xe2\x9c\x93") then
-        connectionMsg = connStatus
-    elseif prefs.wp_siteUrl and prefs.wp_siteUrl ~= "" then
-        connectionMsg = "Connection not tested — open Plug-in Manager to test."
-    else
-        connectionMsg = "Not configured — open Plug-in Manager to set up your WordPress connection."
+    -- Build connection status message from export settings
+    local connectionMsg = propertyTable.wp_connectionStatus
+    if not connectionMsg or connectionMsg == "" then
+        if propertyTable.wp_siteUrl and propertyTable.wp_siteUrl ~= "" then
+            connectionMsg = "Connection not tested yet."
+        else
+            connectionMsg = ""
+        end
     end
 
     return {
         ---------------------
-        -- Connection status
+        -- Connection
         ---------------------
         {
             title    = "WordPress Connection",
-            synopsis = connectionMsg,
+            synopsis = LrView.bind {
+                key = "wp_connectionStatus",
+                transform = function(value)
+                    if value and value ~= "" then return value end
+                    return "Not configured"
+                end,
+            },
 
             f:row {
                 f:static_text {
-                    title           = connectionMsg,
+                    title     = "Site URL:",
+                    alignment = "right",
+                    width     = LrView.share "label_width",
+                },
+                f:edit_field {
+                    value          = LrView.bind "wp_siteUrl",
+                    width_in_chars = 35,
+                    tooltip        = "e.g. https://tiags.space",
+                },
+            },
+
+            f:row {
+                f:static_text {
+                    title     = "Username:",
+                    alignment = "right",
+                    width     = LrView.share "label_width",
+                },
+                f:edit_field {
+                    value          = LrView.bind "wp_username",
+                    width_in_chars = 25,
+                },
+            },
+
+            f:row {
+                f:static_text {
+                    title     = "App Password:",
+                    alignment = "right",
+                    width     = LrView.share "label_width",
+                },
+                f:edit_field {
+                    value          = LrView.bind "wp_appPassword",
+                    width_in_chars = 25,
+                },
+            },
+
+            f:row {
+                f:push_button {
+                    title  = "Test Connection",
+                    action = function()
+                        LrTasks.startAsyncTask(function()
+                            logger:trace("Testing connection to " .. tostring(propertyTable.wp_siteUrl))
+                            propertyTable.wp_connectionStatus = "Connecting..."
+                            local name, err = WordPressAPI.testConnection(
+                                propertyTable.wp_siteUrl,
+                                propertyTable.wp_username,
+                                propertyTable.wp_appPassword
+                            )
+                            if name then
+                                logger:trace("Connected as: " .. name)
+                                propertyTable.wp_connectionStatus = "Connected as " .. name
+
+                                local types, typesErr = WordPressAPI.fetchPostTypes(
+                                    propertyTable.wp_siteUrl,
+                                    propertyTable.wp_username,
+                                    propertyTable.wp_appPassword
+                                )
+                                if types then
+                                    logger:trace("Fetched " .. #types .. " post types")
+                                    propertyTable.wp_postTypes = Utils.jsonEncode(types)
+                                else
+                                    logger:warn("Failed to fetch post types: " .. tostring(typesErr))
+                                end
+                            else
+                                logger:warn("Connection failed: " .. tostring(err))
+                                propertyTable.wp_connectionStatus = "Error: " .. (err or "Unknown error")
+                            end
+                        end)
+                    end,
+                },
+
+                f:static_text {
+                    title           = LrView.bind "wp_connectionStatus",
                     fill_horizontal = 1,
                 },
+            },
+
+            f:separator { fill_horizontal = 1 },
+
+            f:static_text {
+                title           = "Create an Application Password in WordPress: Users > Profile > Application Passwords.\nEnter a name (e.g. \"Lightroom\"), click Add New, and paste the generated password above.\nYour site must use HTTPS. The REST API must be enabled (it is by default).",
+                fill_horizontal = 1,
+                height_in_lines = 3,
             },
         },
 
@@ -227,7 +296,23 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     },
                     f:popup_menu {
                         value = LrView.bind "wp_postType",
-                        items = postTypeMenuItems(),
+                        items = LrView.bind {
+                            key = "wp_postTypes",
+                            transform = function(value)
+                                if not value or value == "" then
+                                    return { { title = "(click Test Connection first)", value = "post" } }
+                                end
+                                local types = Utils.jsonDecode(value)
+                                if not types or #types == 0 then
+                                    return { { title = "(click Test Connection first)", value = "post" } }
+                                end
+                                local items = {}
+                                for _, t in ipairs(types) do
+                                    items[#items + 1] = { title = t.title, value = t.value }
+                                end
+                                return items
+                            end,
+                        },
                         width_in_chars = 25,
                     },
                 },
@@ -292,17 +377,17 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     return
                                 end
 
-                                local typesJson = prefs.wp_postTypes
+                                local typesJson = propertyTable.wp_postTypes
                                 if not typesJson or typesJson == "" then
-                                    LrDialogs.message("Search", "Connect to WordPress first via Plug-in Manager.", "info")
+                                    LrDialogs.message("Search", "Click Test Connection first.", "info")
                                     return
                                 end
 
                                 local postTypes = Utils.jsonDecode(typesJson)
                                 local results = WordPressAPI.searchPosts(
-                                    prefs.wp_siteUrl,
-                                    prefs.wp_username,
-                                    prefs.wp_appPassword,
+                                    propertyTable.wp_siteUrl,
+                                    propertyTable.wp_username,
+                                    propertyTable.wp_appPassword,
                                     query,
                                     postTypes
                                 )
@@ -422,19 +507,19 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
         return
     end
 
-    local siteUrl     = prefs.wp_siteUrl
-    local username    = prefs.wp_username
-    local appPassword = prefs.wp_appPassword
+    local siteUrl     = exportSettings.wp_siteUrl
+    local username    = exportSettings.wp_username
+    local appPassword = exportSettings.wp_appPassword
 
     if not siteUrl or siteUrl == "" then
         LrDialogs.message("WordPress Upload",
-            "No site URL configured. Open Plug-in Manager to set up your connection.",
+            "No site URL configured. Enter your WordPress site URL in the Connection section above.",
             "critical")
         return
     end
     if not username or username == "" or not appPassword or appPassword == "" then
         LrDialogs.message("WordPress Upload",
-            "Missing credentials. Open Plug-in Manager to set up your connection.",
+            "Missing credentials. Enter your username and App Password in the Connection section above.",
             "critical")
         return
     end
@@ -448,7 +533,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
 
     if isNewPost then
         -- Look up the rest_base for the selected post type
-        local postTypesJson = prefs.wp_postTypes
+        local postTypesJson = exportSettings.wp_postTypes
         local postTypes = Utils.jsonDecode(postTypesJson) or {}
         local selectedType = exportSettings.wp_postType or "post"
         postRestBase = "posts" -- default
@@ -498,7 +583,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
         for _, r in ipairs(results) do
             if r.id == postId then
                 -- Look up rest_base from post types
-                local postTypesJson = prefs.wp_postTypes
+                local postTypesJson = exportSettings.wp_postTypes
                 local postTypes = Utils.jsonDecode(postTypesJson) or {}
                 for _, pt in ipairs(postTypes) do
                     if pt.value == r.typeSlug then
