@@ -59,17 +59,26 @@ exportServiceProvider.exportPresetFields = {
 --------------------------------------------------------------------------------
 
 --- Try to get the current collection name for pre-filling the post title.
+--- Wrapped in pcall because catalog access may require a task context.
 local function getCollectionName()
-    local catalog = LrApplication.activeCatalog()
-    if catalog then
-        local sources = catalog:getActiveSources()
-        if sources and #sources > 0 then
-            local source = sources[1]
-            if source.getName then
-                return source:getName()
+    local ok, result = pcall(function()
+        local catalog = LrApplication.activeCatalog()
+        if catalog then
+            local sources = catalog:getActiveSources()
+            if sources and #sources > 0 then
+                local source = sources[1]
+                if source.getName then
+                    return source:getName()
+                end
             end
         end
+        return ""
+    end)
+    if ok then
+        logger:trace("Collection name: " .. tostring(result))
+        return result
     end
+    logger:warn("Could not get collection name: " .. tostring(result))
     return ""
 end
 
@@ -141,6 +150,8 @@ end
 --------------------------------------------------------------------------------
 
 function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
+    logger:trace("Building export dialog sections")
+
     -- Pre-fill title from collection name if empty
     if propertyTable.wp_postTitle == "" then
         propertyTable.wp_postTitle = getCollectionName()
@@ -203,6 +214,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     title  = "Test Connection",
                     action = function()
                         LrTasks.startAsyncTask(function()
+                            logger:trace("Testing connection to " .. tostring(propertyTable.wp_siteUrl))
                             propertyTable.wp_connectionStatus = "Connecting..."
                             local name, err = WordPressAPI.testConnection(
                                 propertyTable.wp_siteUrl,
@@ -210,6 +222,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                 propertyTable.wp_appPassword
                             )
                             if name then
+                                logger:trace("Connected as: " .. name)
                                 propertyTable.wp_connectionStatus = "Connected as " .. name .. " ✓"
                                 -- Fetch post types on successful connection
                                 local types, typesErr = WordPressAPI.fetchPostTypes(
@@ -218,9 +231,13 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     propertyTable.wp_appPassword
                                 )
                                 if types then
+                                    logger:trace("Fetched " .. #types .. " post types")
                                     propertyTable.wp_postTypes = Utils.jsonEncode(types)
+                                else
+                                    logger:warn("Failed to fetch post types: " .. tostring(typesErr))
                                 end
                             else
+                                logger:warn("Connection failed: " .. tostring(err))
                                 propertyTable.wp_connectionStatus = "✗ " .. (err or "Unknown error")
                             end
                         end)
@@ -462,7 +479,8 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     local exportSettings = exportContext.propertyTable
     local nPhotos        = exportSession:countRenditions()
 
-    logger:trace("Starting export of " .. nPhotos .. " photos")
+    logger:trace("=== Starting WordPress export ===")
+    logger:trace("Photos: " .. nPhotos .. ", Destination: " .. tostring(exportSettings.wp_destination))
 
     -- Validation
     if nPhotos == 0 then
@@ -512,6 +530,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
             postTitle = "Untitled"
         end
 
+        logger:trace("Creating new post: type=" .. selectedType .. ", restBase=" .. postRestBase .. ", title=" .. postTitle)
         local postData, err = WordPressAPI.createPost(
             siteUrl, username, appPassword,
             postRestBase, postTitle,
@@ -656,6 +675,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     progress:done()
 
     -- Show summary dialog
+    logger:trace("=== Export complete: " .. #successes .. " succeeded, " .. #failures .. " failed ===")
     local editUrl = siteUrl:gsub("/$", "")
                     .. "/wp-admin/post.php?post=" .. postId .. "&action=edit"
     local previewUrl = siteUrl:gsub("/$", "")
