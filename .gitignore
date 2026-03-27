@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Lightroom generated
+*.lrdata
+
+# Logs
+*.log
