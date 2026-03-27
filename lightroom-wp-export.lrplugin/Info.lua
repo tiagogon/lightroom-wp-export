@@ -3,8 +3,10 @@ return {
     LrSdkMinimumVersion = 6.0,
 
     LrToolkitIdentifier  = "com.tiagsspace.lightroom-wp-export",
-    LrPluginName         = "WordPress Export",
+    LrPluginName         = "WordPress Upload",
     LrPluginInfoUrl      = "https://github.com/tiagogon/lightroom-wp-export",
+
+    LrPluginInfoProvider = "PluginInfoProvider.lua",
 
     LrExportServiceProvider = {
         title = "WordPress Upload",
