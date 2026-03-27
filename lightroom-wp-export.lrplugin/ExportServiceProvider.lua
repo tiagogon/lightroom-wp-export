@@ -527,6 +527,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     -- Determine post ID and starting menu_order
     local postId
     local postRestBase
+    local postTypeSlug  = "post"
     local startingOrder = 0
     local postTitle     = ""
     local isNewPost     = (exportSettings.wp_destination == "new")
@@ -536,6 +537,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
         local postTypesJson = exportSettings.wp_postTypes
         local postTypes = Utils.jsonDecode(postTypesJson) or {}
         local selectedType = exportSettings.wp_postType or "post"
+        postTypeSlug = selectedType
         postRestBase = "posts" -- default
 
         for _, pt in ipairs(postTypes) do
@@ -582,6 +584,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
 
         for _, r in ipairs(results) do
             if r.id == postId then
+                postTypeSlug = r.typeSlug or "post"
                 -- Look up rest_base from post types
                 local postTypesJson = exportSettings.wp_postTypes
                 local postTypes = Utils.jsonDecode(postTypesJson) or {}
@@ -692,7 +695,8 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     local editUrl = siteUrl:gsub("/$", "")
                     .. "/wp-admin/post.php?post=" .. postId .. "&action=edit"
     local previewUrl = siteUrl:gsub("/$", "")
-                       .. "/?p=" .. postId .. "&preview=true"
+                       .. "/?" .. (postTypeSlug ~= "post" and ("post_type=" .. postTypeSlug .. "&") or "")
+                       .. "p=" .. postId .. "&preview=true"
 
     local summaryMsg = "Uploaded " .. #successes .. " of " .. nPhotos .. " images."
     if #failures > 0 then
