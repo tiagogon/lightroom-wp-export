@@ -1,10 +1,12 @@
 local LrHttp          = import "LrHttp"
-local LrStringUtils   = import "LrStringUtils"
 local LrPathUtils     = import "LrPathUtils"
 local LrFileUtils     = import "LrFileUtils"
 
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
+
+local JSON  = require "JSON"
+local Utils = require "Utils"
 
 local WordPressAPI = {}
 
@@ -15,7 +17,7 @@ local WordPressAPI = {}
 --- Build the Basic Auth header value from username + application password.
 local function authHeader(username, appPassword)
     local credentials = username .. ":" .. appPassword
-    return "Basic " .. LrStringUtils.encodeBase64(credentials)
+    return "Basic " .. Utils.encodeBase64(credentials)
 end
 
 --- Normalise the site URL (strip trailing slash).
@@ -34,7 +36,7 @@ local function parseJson(body)
         return nil, "Empty response"
     end
 
-    local decoded = LrStringUtils.jsonDecode(body)
+    local decoded = JSON.decode(body)
     if not decoded then
         return nil, "Failed to parse JSON"
     end
@@ -78,7 +80,7 @@ function WordPressAPI.apiPost(siteUrl, path, username, appPassword, postBody)
     local url = endpointUrl(siteUrl, path)
     logger:trace("POST " .. url)
 
-    local jsonBody = LrStringUtils.jsonEncode(postBody)
+    local jsonBody = JSON.encode(postBody)
     local headers = {
         { field = "Authorization", value = authHeader(username, appPassword) },
         { field = "Content-Type",  value = "application/json" },
@@ -171,7 +173,7 @@ end
 --- Search posts across a specific post type. Returns array of result tables.
 local function searchByType(siteUrl, username, appPassword, restBase, typeName, query)
     local path = "/wp/v2/" .. restBase
-                 .. "?search=" .. LrStringUtils.urlEncode(query)
+                 .. "?search=" .. Utils.urlEncode(query)
                  .. "&per_page=10"
                  .. "&_fields=id,title,status,type"
     local data, err = WordPressAPI.apiGet(siteUrl, path, username, appPassword)

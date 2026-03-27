@@ -7,9 +7,8 @@ return {
     LrPluginInfoUrl      = "https://github.com/tiagogon/lightroom-wp-export",
 
     LrExportServiceProvider = {
-        title                = "WordPress Upload",
-        file                 = "ExportServiceProvider.lua",
-        builtInPresetsDir    = "presets",
+        title = "WordPress Upload",
+        file  = "ExportServiceProvider.lua",
     },
 
     VERSION = { major = 1, minor = 0, revision = 0, build = 1 },

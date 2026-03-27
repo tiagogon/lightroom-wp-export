@@ -1,8 +1,48 @@
 local LrPathUtils   = import "LrPathUtils"
 local LrFileUtils   = import "LrFileUtils"
-local LrStringUtils = import "LrStringUtils"
 
 local Utils = {}
+
+--------------------------------------------------------------------------------
+-- Base64 encoding
+--------------------------------------------------------------------------------
+
+local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+function Utils.encodeBase64(data)
+    local result = {}
+    local pad = 0
+    local len = #data
+
+    for i = 1, len, 3 do
+        local a = data:byte(i)
+        local b = i + 1 <= len and data:byte(i + 1) or 0
+        local c = i + 2 <= len and data:byte(i + 2) or 0
+
+        local n = a * 65536 + b * 256 + c
+
+        result[#result + 1] = b64chars:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+        result[#result + 1] = b64chars:sub(math.floor(n / 4096) % 64 + 1, math.floor(n / 4096) % 64 + 1)
+        result[#result + 1] = (i + 1 <= len) and b64chars:sub(math.floor(n / 64) % 64 + 1, math.floor(n / 64) % 64 + 1) or "="
+        result[#result + 1] = (i + 2 <= len) and b64chars:sub(n % 64 + 1, n % 64 + 1) or "="
+    end
+
+    return table.concat(result)
+end
+
+--------------------------------------------------------------------------------
+-- URL encoding
+--------------------------------------------------------------------------------
+
+function Utils.urlEncode(str)
+    if not str then return "" end
+    str = str:gsub("\n", "\r\n")
+    str = str:gsub("([^%w%-%.%_%~ ])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+    str = str:gsub(" ", "+")
+    return str
+end
 
 --- Convert a string to a URL-safe slug: lowercase, hyphens, no special chars.
 function Utils.slugify(text)

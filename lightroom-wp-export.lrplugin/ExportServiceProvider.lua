@@ -5,15 +5,14 @@ local LrApplication   = import "LrApplication"
 local LrProgressScope = import "LrProgressScope"
 local LrPathUtils     = import "LrPathUtils"
 local LrHttp          = import "LrHttp"
-local LrFunctionContext = import "LrFunctionContext"
-local LrBinding       = import "LrBinding"
-local LrStringUtils   = import "LrStringUtils"
+local LrColor         = import "LrColor"
 
 local logger = import "LrLogger"("WordPressExport")
 logger:enable("logfile")
 
 local WordPressAPI = require "WordPressAPI"
 local Utils        = require "Utils"
+local JSON         = require "JSON"
 
 --------------------------------------------------------------------------------
 -- Export Service Provider table
@@ -80,7 +79,7 @@ local function postTypeMenuItems(postTypesJson)
         return { { title = "(connect first)", value = "post" } }
     end
 
-    local types = LrStringUtils.jsonDecode(postTypesJson)
+    local types = JSON.decode(postTypesJson)
     if not types or #types == 0 then
         return { { title = "(connect first)", value = "post" } }
     end
@@ -98,7 +97,7 @@ local function searchResultMenuItems(resultsJson)
         return { { title = "(search for a post)", value = 0 } }
     end
 
-    local results = LrStringUtils.jsonDecode(resultsJson)
+    local results = JSON.decode(resultsJson)
     if not results or #results == 0 then
         return { { title = "(no results)", value = 0 } }
     end
@@ -124,7 +123,7 @@ local function updateSelectedPostInfo(propertyTable)
         return
     end
 
-    local results = LrStringUtils.jsonDecode(resultsJson)
+    local results = JSON.decode(resultsJson)
     if not results then return end
 
     for _, r in ipairs(results) do
@@ -193,7 +192,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     alignment = "right",
                     width     = LrView.share "label_width",
                 },
-                f:password_field {
+                f:edit_field {
                     value         = LrView.bind "wp_appPassword",
                     width_in_chars = 25,
                 },
@@ -219,7 +218,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     propertyTable.wp_appPassword
                                 )
                                 if types then
-                                    propertyTable.wp_postTypes = LrStringUtils.jsonEncode(types)
+                                    propertyTable.wp_postTypes = JSON.encode(types)
                                 end
                             else
                                 propertyTable.wp_connectionStatus = "✗ " .. (err or "Unknown error")
@@ -231,17 +230,6 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                 f:static_text {
                     title           = LrView.bind "wp_connectionStatus",
                     fill_horizontal = 1,
-                    text_color      = LrView.bind {
-                        key = "wp_connectionStatus",
-                        transform = function(value)
-                            if value and value:find("✓") then
-                                return LrView.color(0, 0.6, 0)
-                            elseif value and value:find("✗") then
-                                return LrView.color(0.8, 0, 0)
-                            end
-                            return LrView.color(0.5, 0.5, 0.5)
-                        end,
-                    },
                 },
             },
         },
@@ -365,7 +353,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     return
                                 end
 
-                                local postTypes = LrStringUtils.jsonDecode(typesJson)
+                                local postTypes = JSON.decode(typesJson)
                                 local results = WordPressAPI.searchPosts(
                                     propertyTable.wp_siteUrl,
                                     propertyTable.wp_username,
@@ -374,7 +362,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                                     postTypes
                                 )
 
-                                propertyTable.wp_searchResults = LrStringUtils.jsonEncode(results)
+                                propertyTable.wp_searchResults = JSON.encode(results)
                                 if #results > 0 then
                                     propertyTable.wp_selectedPostId = results[1].id
                                     updateSelectedPostInfo(propertyTable)
@@ -410,7 +398,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     },
                     f:static_text {
                         title = LrView.bind "wp_selectedPostInfo",
-                        text_color = LrView.color(0.5, 0.5, 0.5),
+
                     },
                 },
 
@@ -508,7 +496,7 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
     if isNewPost then
         -- Look up the rest_base for the selected post type
         local postTypesJson = exportSettings.wp_postTypes
-        local postTypes = LrStringUtils.jsonDecode(postTypesJson) or {}
+        local postTypes = JSON.decode(postTypesJson) or {}
         local selectedType = exportSettings.wp_postType or "post"
         postRestBase = "posts" -- default
 
@@ -550,14 +538,14 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
 
         -- Determine rest_base from search results
         local resultsJson = exportSettings.wp_searchResults
-        local results = LrStringUtils.jsonDecode(resultsJson) or {}
+        local results = JSON.decode(resultsJson) or {}
         postRestBase = "posts"
 
         for _, r in ipairs(results) do
             if r.id == postId then
                 -- Look up rest_base from post types
                 local postTypesJson = exportSettings.wp_postTypes
-                local postTypes = LrStringUtils.jsonDecode(postTypesJson) or {}
+                local postTypes = JSON.decode(postTypesJson) or {}
                 for _, pt in ipairs(postTypes) do
                     if pt.value == r.typeSlug then
                         postRestBase = pt.restBase
