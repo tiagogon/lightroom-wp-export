@@ -10,6 +10,8 @@ Export photos from Lightroom Classic directly to WordPress posts (including cust
 - **Filename renaming** — files renamed to `{post-title}-001.jpg`, `{post-title}-002.jpg`, etc.
 - **Featured image** — optionally set the first uploaded image as the post thumbnail
 - **Status control** — choose Draft or Published for new posts; override status on existing posts
+- **Date source (new posts)** — choose No custom date, earliest exported photo date, or a custom date
+- **Persistent date preferences** — remembers the last Date source option and custom date value in export presets
 - **Export presets** — all settings save with Lightroom's standard preset system
 
 ## Requirements
@@ -74,7 +76,11 @@ The connection settings are shared across all exports — you only need to confi
 2. File → Export → choose your WordPress preset
 3. Set destination to **New Post**
 4. Pick a **Post Type**, enter a **Title**, choose **Status**
-5. Click **Export**
+5. Choose a **Date source**:
+   - **No custom date**
+   - **Use earliest exported photo date**
+   - **Enter custom date** (`YYYY-MM-DD HH:MM`)
+6. Click **Export**
 
 ### Export to an existing post
 

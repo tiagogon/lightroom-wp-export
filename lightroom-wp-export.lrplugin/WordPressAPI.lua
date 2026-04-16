@@ -257,11 +257,14 @@ end
 --------------------------------------------------------------------------------
 
 --- Create a new post. Returns (post data table) or (nil, error).
-function WordPressAPI.createPost(siteUrl, username, appPassword, restBase, title, status)
+function WordPressAPI.createPost(siteUrl, username, appPassword, restBase, title, status, date)
     local body = {
         title  = title,
         status = status or "draft",
     }
+    if date and date ~= "" then
+        body.date = date
+    end
     return WordPressAPI.apiPost(siteUrl, "/wp/v2/" .. restBase, username, appPassword, body)
 end
 

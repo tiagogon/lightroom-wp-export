@@ -39,6 +39,8 @@ exportServiceProvider.exportPresetFields = {
     { key = "wp_postType",        default = "post" },
     { key = "wp_postTitle",       default = "" },
     { key = "wp_postStatus",      default = "draft" },
+    { key = "wp_dateSource",      default = "none" }, -- "none" | "earliest_photo" | "custom"
+    { key = "wp_customDate",      default = "" }, -- YYYY-MM-DD HH:MM
 
     { key = "wp_searchQuery",     default = "" },
     { key = "wp_selectedPostId",  default = 0 },
@@ -53,6 +55,385 @@ exportServiceProvider.exportPresetFields = {
     { key = "wp_connectionStatus", default = "" },
     { key = "wp_postTypes",       default = "" }, -- JSON-encoded post types
 }
+
+local MONTHS_SHORT = {
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+}
+
+--- Parse a date input in YYYY-MM-DD HH:MM and return normalized parts.
+local function parseManualDateInput(value)
+    local input = tostring(value or "")
+    local y, m, d, h, min = input:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)%s+(%d%d):(%d%d)$")
+    if not y then
+        return nil, "Use format YYYY-MM-DD HH:MM."
+    end
+
+    y, m, d, h, min = tonumber(y), tonumber(m), tonumber(d), tonumber(h), tonumber(min)
+    if not y or not m or not d or not h or not min then
+        return nil, "Invalid date/time values."
+    end
+
+    if m < 1 or m > 12 or d < 1 or d > 31 or h > 23 or min > 59 then
+        return nil, "Date/time values are out of range."
+    end
+
+    local ts = os.time({ year = y, month = m, day = d, hour = h, min = min, sec = 0 })
+    if not ts then
+        return nil, "Invalid date/time."
+    end
+
+    local parts = os.date("*t", ts)
+    if not parts
+        or parts.year ~= y
+        or parts.month ~= m
+        or parts.day ~= d
+        or parts.hour ~= h
+        or parts.min ~= min then
+        return nil, "Invalid calendar date/time."
+    end
+
+    return {
+        year = y,
+        month = m,
+        day = d,
+        hour = h,
+        min = min,
+    }
+end
+
+--- Convert parsed date parts to WordPress REST API date format.
+local function toWpDateString(parts)
+    return string.format(
+        "%04d-%02d-%02dT%02d:%02d:00",
+        parts.year,
+        parts.month,
+        parts.day,
+        parts.hour,
+        parts.min
+    )
+end
+
+--- Create a human-readable date label from parsed date parts.
+local function formatHumanDate(parts)
+    local monthLabel = MONTHS_SHORT[parts.month] or tostring(parts.month)
+    return string.format(
+        "%02d %s %04d, %02d:%02d",
+        parts.day,
+        monthLabel,
+        parts.year,
+        parts.hour,
+        parts.min
+    )
+end
+
+--- Parse a photo date string from Lightroom metadata.
+local function parsePhotoDateString(value)
+    if value == nil then
+        return nil
+    end
+
+    if type(value) == "number" and value > 0 then
+        local partsNum = os.date("*t", value)
+        if partsNum then
+            return {
+                year = partsNum.year,
+                month = partsNum.month,
+                day = partsNum.day,
+                hour = partsNum.hour,
+                min = partsNum.min,
+                sec = partsNum.sec,
+                ts = value,
+            }
+        end
+    end
+
+    local text = tostring(value or "")
+    if text == "" then
+        return nil
+    end
+
+    -- Common formats handled:
+    -- 1) YYYY-MM-DD HH:MM:SS
+    -- 2) YYYY:MM:DD HH:MM:SS (EXIF)
+    -- 3) YYYY-MM-DDTHH:MM:SS(+TZ)
+    -- 4) YYYY-MM-DD HH:MM
+    -- 5) YYYY:MM:DD HH:MM
+    -- 6) YYYY-MM-DD (date only)
+    local y, m, d, h, min, s = text:match("^(%d%d%d%d)[-:](%d%d)[-:](%d%d)[T%s](%d%d):(%d%d):(%d%d)")
+    if not y then
+        y, m, d, h, min = text:match("^(%d%d%d%d)[-:](%d%d)[-:](%d%d)[T%s](%d%d):(%d%d)")
+        s = "00"
+    end
+    if not y then
+        y, m, d = text:match("^(%d%d%d%d)[-:](%d%d)[-:](%d%d)$")
+        h, min, s = "00", "00", "00"
+    end
+    if not y then
+        return nil
+    end
+
+    y, m, d = tonumber(y), tonumber(m), tonumber(d)
+    h, min, s = tonumber(h or 0), tonumber(min or 0), tonumber(s or 0)
+    if not y or not m or not d or not h or not min or not s then
+        return nil
+    end
+
+    local ts = os.time({ year = y, month = m, day = d, hour = h, min = min, sec = s })
+    if not ts then
+        return nil
+    end
+
+    local parts = os.date("*t", ts)
+    if not parts
+        or parts.year ~= y
+        or parts.month ~= m
+        or parts.day ~= d
+        or parts.hour ~= h
+        or parts.min ~= min then
+        return nil
+    end
+
+    return {
+        year = parts.year,
+        month = parts.month,
+        day = parts.day,
+        hour = parts.hour,
+        min = parts.min,
+        sec = parts.sec,
+        ts = ts,
+    }
+end
+
+local function safeGetFormatted(photo, key)
+    return photo:getFormattedMetadata(key)
+end
+
+local function safeGetRaw(photo, key)
+    return photo:getRawMetadata(key)
+end
+
+local function stringifyMetaValue(value)
+    if value == nil then
+        return "nil"
+    end
+    if type(value) == "table" then
+        return "<table>"
+    end
+    local text = tostring(value)
+    if #text > 120 then
+        return text:sub(1, 120) .. "..."
+    end
+    return text
+end
+
+local function logPhotoDateProbe(photo, index)
+    local path = safeGetRaw(photo, "path")
+    local fileName = safeGetFormatted(photo, "fileName")
+    local label = fileName or path or ("photo " .. tostring(index))
+
+    local probeKeys = {
+        "dateTimeOriginal",
+        "dateTime",
+        "dateCreated",
+        "captureTime",
+        "dateTimeOriginalISO8601",
+        "dateTimeISO8601",
+    }
+
+    logger:trace("Date probe " .. tostring(index) .. ": " .. tostring(label))
+    for _, key in ipairs(probeKeys) do
+        local formattedVal = safeGetFormatted(photo, key)
+        local rawVal = safeGetRaw(photo, key)
+        logger:trace(
+            "  " .. key
+            .. " | formatted=" .. stringifyMetaValue(formattedVal)
+            .. " | raw=" .. stringifyMetaValue(rawVal)
+        )
+    end
+end
+
+--- Extract capture date from a photo using common metadata keys.
+local function extractPhotoCaptureParts(photo)
+    if not photo then
+        return nil
+    end
+
+    local formattedKeys = {
+        "dateTimeOriginal",
+        "dateTime",
+        "dateCreated",
+        "captureTime",
+        "dateTimeISO8601",
+        "dateTimeOriginalISO8601",
+    }
+    for _, key in ipairs(formattedKeys) do
+        local value = safeGetFormatted(photo, key)
+        if value and value ~= "" then
+            local parsed = parsePhotoDateString(value)
+            if parsed then
+                return parsed
+            end
+        end
+    end
+
+    local rawDateKeys = {
+        "dateTimeOriginal",
+        "dateTime",
+        "dateCreated",
+        "captureTime",
+        "dateTimeOriginalISO8601",
+        "dateTimeISO8601",
+    }
+    for _, key in ipairs(rawDateKeys) do
+        local value = safeGetRaw(photo, key)
+        if value and value ~= "" then
+            local parsed = parsePhotoDateString(value)
+            if parsed then
+                return parsed
+            end
+        end
+    end
+
+    local captureTs = safeGetRaw(photo, "captureTime")
+    if type(captureTs) == "number" and captureTs > 0 then
+        local parts = os.date("*t", captureTs)
+        if parts then
+            return {
+                year = parts.year,
+                month = parts.month,
+                day = parts.day,
+                hour = parts.hour,
+                min = parts.min,
+                sec = parts.sec,
+                ts = captureTs,
+            }
+        end
+    end
+
+    return nil
+end
+
+--- Return the earliest capture date found across photos to export.
+local function resolveEarliestPhotoDate(exportSession)
+    local photos
+
+    if exportSession and type(exportSession.photosToExport) == "function" then
+        local okPhotos, exportPhotos = pcall(function()
+            return exportSession:photosToExport()
+        end)
+        if okPhotos and type(exportPhotos) == "table" and #exportPhotos > 0 then
+            photos = exportPhotos
+            logger:trace("Date source probe: using exportSession:photosToExport() with " .. tostring(#photos) .. " photos")
+        end
+    end
+
+    -- Fallback: use Lightroom's current target photos when session list is unavailable.
+    if not photos or #photos == 0 then
+        local okCatalog, targetPhotos = pcall(function()
+            local catalog = LrApplication.activeCatalog()
+            if not catalog then return nil end
+
+            local selected = catalog:getTargetPhotos()
+            if selected and #selected > 0 then
+                return selected
+            end
+
+            if type(catalog.getMultipleSelectedOrAllPhotos) == "function" then
+                local multi = catalog:getMultipleSelectedOrAllPhotos()
+                if multi and #multi > 0 then
+                    return multi
+                end
+            end
+
+            return nil
+        end)
+
+        if okCatalog and type(targetPhotos) == "table" and #targetPhotos > 0 then
+            photos = targetPhotos
+            logger:trace("Date source probe: using catalog target photos with " .. tostring(#photos) .. " photos")
+        end
+    end
+
+    if not photos or #photos == 0 then
+        return nil, "Could not determine the exported photo list for date detection."
+    end
+
+    local earliest
+    local unresolvedCount = 0
+
+    local function scanPhotos()
+        for i, photo in ipairs(photos) do
+            local parsed = extractPhotoCaptureParts(photo)
+            if parsed and (not earliest or parsed.ts < earliest.ts) then
+                earliest = parsed
+                logger:trace("Date source probe: candidate from photo " .. tostring(i) .. " => " .. toWpDateString(parsed))
+            elseif not parsed then
+                unresolvedCount = unresolvedCount + 1
+                if unresolvedCount <= 3 then
+                    logPhotoDateProbe(photo, i)
+                end
+            end
+        end
+    end
+
+    local catalog = LrApplication.activeCatalog()
+    if catalog and type(catalog.withReadAccessDo) == "function" then
+        local okRead, readErr = pcall(function()
+            catalog:withReadAccessDo(function()
+                scanPhotos()
+            end)
+        end)
+        if not okRead then
+            logger:trace("Date source probe: withReadAccessDo failed: " .. tostring(readErr))
+            scanPhotos()
+        end
+    else
+        scanPhotos()
+    end
+
+    if not earliest then
+        logger:trace("Date source probe: no parseable capture date found across " .. tostring(#photos) .. " photos")
+        return nil, "No usable capture date was found in the exported photos."
+    end
+
+    return earliest
+end
+
+local function customDatePreviewLabel(value)
+    local parts = parseManualDateInput(value)
+    if not parts then
+        return "Will save draft date as: (enter a valid date)"
+    end
+    return "Will save draft date as: " .. formatHumanDate(parts)
+end
+
+--- Resolve optional WordPress post date based on the selected date source.
+local function resolveOptionalPostDate(exportSettings, exportSession)
+    local source = exportSettings.wp_dateSource or "none"
+
+    if source == "none" then
+        return nil
+    end
+
+    if source == "custom" then
+        local parts, err = parseManualDateInput(exportSettings.wp_customDate)
+        if not parts then
+            return nil, err
+        end
+        return toWpDateString(parts)
+    end
+
+    if source == "earliest_photo" then
+        local earliest, err = resolveEarliestPhotoDate(exportSession)
+        if not earliest then
+            return nil, err
+        end
+        return toWpDateString(earliest)
+    end
+
+    return nil, "Invalid date source selection."
+end
 
 --------------------------------------------------------------------------------
 -- Dialog helpers
@@ -344,6 +725,104 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                         width_in_chars = 15,
                     },
                 },
+
+                f:row {
+                    f:static_text {
+                        title     = "Date source:",
+                        alignment = "right",
+                        width     = LrView.share "label_width",
+                    },
+                    f:radio_button {
+                        title = "No custom date",
+                        value = LrView.bind "wp_dateSource",
+                        checked_value = "none",
+                    },
+                },
+
+                f:row {
+                    f:static_text {
+                        title = "",
+                        width = LrView.share "label_width",
+                    },
+                    f:radio_button {
+                        title = "Use earliest exported photo date",
+                        value = LrView.bind "wp_dateSource",
+                        checked_value = "earliest_photo",
+                    },
+                },
+
+                f:row {
+                    f:static_text {
+                        title = "",
+                        width = LrView.share "label_width",
+                    },
+                    f:radio_button {
+                        title = "Enter custom date",
+                        value = LrView.bind "wp_dateSource",
+                        checked_value = "custom",
+                    },
+                },
+
+                f:row {
+                    visible = LrView.bind {
+                        key = "wp_dateSource",
+                        transform = function(value) return value == "custom" end,
+                    },
+                    f:static_text {
+                        title     = "Publish date:",
+                        alignment = "right",
+                        width     = LrView.share "label_width",
+                    },
+                    f:edit_field {
+                        value          = LrView.bind "wp_customDate",
+                        width_in_chars = 20,
+                    },
+                },
+
+                f:row {
+                    visible = LrView.bind {
+                        key = "wp_dateSource",
+                        transform = function(value) return value == "custom" end,
+                    },
+                    f:static_text {
+                        title = "",
+                        width = LrView.share "label_width",
+                    },
+                    f:static_text {
+                        title = "Use YYYY-MM-DD HH:MM",
+                    },
+                },
+
+                f:row {
+                    visible = LrView.bind {
+                        key = "wp_dateSource",
+                        transform = function(value) return value == "custom" end,
+                    },
+                    f:static_text {
+                        title = "",
+                        width = LrView.share "label_width",
+                    },
+                    f:static_text {
+                        title = LrView.bind {
+                            key = "wp_customDate",
+                            transform = customDatePreviewLabel,
+                        },
+                    },
+                },
+
+                f:row {
+                    visible = LrView.bind {
+                        key = "wp_dateSource",
+                        transform = function(value) return value == "earliest_photo" end,
+                    },
+                    f:static_text {
+                        title = "",
+                        width = LrView.share "label_width",
+                    },
+                    f:static_text {
+                        title = "Earliest date is resolved from exported photos at export time.",
+                    },
+                },
             },
 
             -- Existing Post sub-section
@@ -480,6 +959,22 @@ end
 
 function exportServiceProvider.updateExportSettings(exportSettings)
     -- Called before export starts — can validate and modify settings
+    local source = exportSettings.wp_dateSource or "none"
+    if source ~= "none" and source ~= "earliest_photo" and source ~= "custom" then
+        exportSettings.wp_dateSource = "none"
+        source = "none"
+    end
+
+    if source == "custom" then
+        local _, err = parseManualDateInput(exportSettings.wp_customDate)
+        if err then
+            LrDialogs.message(
+                "WordPress Export",
+                "Invalid custom date. " .. err,
+                "critical"
+            )
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -553,10 +1048,17 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
         end
 
         logger:trace("Creating new post: type=" .. selectedType .. ", restBase=" .. postRestBase .. ", title=" .. postTitle)
+        local postDate, dateErr = resolveOptionalPostDate(exportSettings, exportSession)
+        if dateErr then
+            LrDialogs.message("WordPress Export", "Date source error: " .. dateErr, "critical")
+            return
+        end
+
         local postData, err = WordPressAPI.createPost(
             siteUrl, username, appPassword,
             postRestBase, postTitle,
-            exportSettings.wp_postStatus or "draft"
+            exportSettings.wp_postStatus or "draft",
+            postDate
         )
 
         if not postData then
