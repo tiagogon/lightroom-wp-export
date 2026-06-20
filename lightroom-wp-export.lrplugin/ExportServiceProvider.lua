@@ -23,8 +23,10 @@ local exportServiceProvider = {}
 -- This is an export-only plugin, not a publish service.
 exportServiceProvider.supportsIncrementalPublish = false
 
--- We use Lightroom's built-in File Settings and Image Sizing sections.
-exportServiceProvider.hideSections  = {}
+-- Upload-only: hide Export Location and File Naming so Lightroom renders to a
+-- temporary folder (auto-deleted). The plugin names uploads itself from the
+-- post title, so no local copies or Lightroom naming are needed.
+exportServiceProvider.hideSections  = { "exportLocation", "fileNaming" }
 exportServiceProvider.allowFileFormats = { "JPEG", "PNG", "ORIGINAL" }
 exportServiceProvider.allowColorSpaces = nil -- allow all
 
@@ -47,6 +49,9 @@ exportServiceProvider.exportPresetFields = {
     { key = "wp_selectedPostInfo", default = "" },
     { key = "wp_existingStatus",  default = "keep" },
 
+    { key = "wp_recentPosts",     default = "" }, -- JSON-encoded array of recent posts
+    { key = "wp_recentChoice",    default = 0 },  -- selected recent slot index (1..N), 0 = none
+
     { key = "wp_setFeatured",     default = true },
     { key = "wp_stripExif",       default = true },
 
@@ -55,6 +60,9 @@ exportServiceProvider.exportPresetFields = {
     { key = "wp_connectionStatus", default = "" },
     { key = "wp_postTypes",       default = "" }, -- JSON-encoded post types
 }
+
+-- Number of recently-edited posts shown as one-click radio buttons.
+local RECENT_COUNT = 5
 
 local MONTHS_SHORT = {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -464,6 +472,14 @@ local function getCollectionName()
 end
 
 
+--- Human-readable label for a post result: "Title (Type · status · N images)".
+local function formatPostLabel(r)
+    return r.title
+        .. " (" .. (r.typeName or r.typeSlug or "")
+        .. " · " .. (r.status or "")
+        .. " · " .. tostring(r.attachmentCount or 0) .. " images)"
+end
+
 --- Build popup menu items from search results JSON string.
 local function searchResultMenuItems(resultsJson)
     if not resultsJson or resultsJson == "" then
@@ -477,36 +493,83 @@ local function searchResultMenuItems(resultsJson)
 
     local items = {}
     for _, r in ipairs(results) do
-        local label = r.title
-                      .. " (" .. (r.typeName or r.typeSlug or "")
-                      .. " · " .. (r.status or "")
-                      .. " · " .. tostring(r.attachmentCount or 0) .. " images)"
-        items[#items + 1] = { title = label, value = r.id }
+        items[#items + 1] = { title = formatPostLabel(r), value = r.id }
     end
     return items
 end
 
---- Store the selected post's info text for display.
-local function updateSelectedPostInfo(propertyTable)
-    local resultsJson = propertyTable.wp_searchResults
-    local selectedId = propertyTable.wp_selectedPostId
-
-    if not resultsJson or resultsJson == "" or not selectedId or selectedId == 0 then
-        propertyTable.wp_selectedPostInfo = ""
-        return
-    end
-
+--- Find a post (by id) in a JSON-encoded results array. Returns the entry or nil.
+local function findPostInJson(resultsJson, id)
+    if not resultsJson or resultsJson == "" or not id or id == 0 then return nil end
     local results = Utils.jsonDecode(resultsJson)
-    if not results then return end
-
+    if not results then return nil end
     for _, r in ipairs(results) do
-        if r.id == selectedId then
-            propertyTable.wp_selectedPostInfo = (r.typeName or "")
-                .. " · " .. (r.status or "")
-                .. " · " .. tostring(r.attachmentCount or 0) .. " images"
-            return
-        end
+        if r.id == id then return r end
     end
+    return nil
+end
+
+--- Store the selected post's info text for display. Looks in both the recent
+--- list and the search results, since either can hold the selected post.
+local function updateSelectedPostInfo(propertyTable)
+    local selectedId = propertyTable.wp_selectedPostId
+    local r = findPostInJson(propertyTable.wp_recentPosts, selectedId)
+             or findPostInJson(propertyTable.wp_searchResults, selectedId)
+
+    if r then
+        propertyTable.wp_selectedPostInfo = (r.typeName or "")
+            .. " · " .. (r.status or "")
+            .. " · " .. tostring(r.attachmentCount or 0) .. " images"
+    else
+        propertyTable.wp_selectedPostInfo = ""
+    end
+end
+
+--- Label for the i-th recent radio slot, or "" if that slot is empty.
+local function recentRadioLabel(recentJson, i)
+    if not recentJson or recentJson == "" then return "" end
+    local recent = Utils.jsonDecode(recentJson)
+    if recent and recent[i] then return formatPostLabel(recent[i]) end
+    return ""
+end
+
+--- True if the recent list has at least i entries.
+local function recentCountAtLeast(recentJson, i)
+    if not recentJson or recentJson == "" then return false end
+    local recent = Utils.jsonDecode(recentJson)
+    return recent ~= nil and #recent >= i
+end
+
+--- Populate the Recent radio list with the most recently edited posts.
+--- No-op if the connection hasn't been tested yet (no post types known).
+local function loadRecentPosts(propertyTable)
+    LrTasks.startAsyncTask(function()
+        local typesJson = propertyTable.wp_postTypes
+        if not typesJson or typesJson == "" then return end
+
+        local postTypes = Utils.jsonDecode(typesJson)
+        if not postTypes then return end
+
+        local results = WordPressAPI.getRecentPosts(
+            propertyTable.wp_siteUrl,
+            propertyTable.wp_username,
+            propertyTable.wp_appPassword,
+            postTypes,
+            RECENT_COUNT
+        )
+
+        propertyTable.wp_recentPosts = Utils.jsonEncode(results)
+        if #results > 0 then
+            -- Default-select the most recent post.
+            propertyTable.wp_recentChoice = 1
+            propertyTable.wp_selectedPostId = results[1].id
+            updateSelectedPostInfo(propertyTable)
+        else
+            propertyTable.wp_recentChoice = 0
+            propertyTable.wp_selectedPostId = 0
+            propertyTable.wp_selectedPostInfo = ""
+        end
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -521,6 +584,60 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
         propertyTable.wp_postTitle = getCollectionName()
     end
 
+    -- Clear any recent-post state persisted from a previous session so the list
+    -- is always re-fetched fresh for this dialog.
+    propertyTable.wp_recentPosts  = ""
+    propertyTable.wp_recentChoice = 0
+
+    -- Auto-load recent posts and wire the Recent radio list <-> selection.
+    -- Attach observers once per dialog.
+    if not propertyTable._wp_recentObserversAttached then
+        propertyTable._wp_recentObserversAttached = true
+
+        local function maybeLoadRecent(props)
+            if props.wp_destination == "existing"
+                and (not props.wp_recentPosts or props.wp_recentPosts == "") then
+                loadRecentPosts(props)
+            end
+        end
+
+        propertyTable:addObserver("wp_destination", maybeLoadRecent)
+        -- After Test Connection populates post types, refresh if showing Existing.
+        propertyTable:addObserver("wp_postTypes", maybeLoadRecent)
+
+        -- Clicking a Recent radio (slot index) selects the matching post.
+        propertyTable:addObserver("wp_recentChoice", function(props)
+            local choice = props.wp_recentChoice
+            if not choice or choice == 0 then return end
+            local recent = Utils.jsonDecode(props.wp_recentPosts or "")
+            if recent and recent[choice] then
+                props.wp_selectedPostId = recent[choice].id
+                updateSelectedPostInfo(props)
+            end
+        end)
+
+        -- Keep the info line in sync, and deselect the radios when the selection
+        -- comes from somewhere else (Search / Result dropdown).
+        propertyTable:addObserver("wp_selectedPostId", function(props)
+            updateSelectedPostInfo(props)
+            local choice = props.wp_recentChoice or 0
+            if choice > 0 then
+                local recent = Utils.jsonDecode(props.wp_recentPosts or "")
+                local r = recent and recent[choice]
+                if not r or r.id ~= props.wp_selectedPostId then
+                    props.wp_recentChoice = 0
+                end
+            end
+        end)
+    end
+
+    -- Always refresh recent posts when the dialog opens already on Existing Post,
+    -- so the list isn't stale from a previous session.
+    if propertyTable.wp_destination == "existing"
+        and propertyTable.wp_postTypes and propertyTable.wp_postTypes ~= "" then
+        loadRecentPosts(propertyTable)
+    end
+
     -- Build connection status message from export settings
     local connectionMsg = propertyTable.wp_connectionStatus
     if not connectionMsg or connectionMsg == "" then
@@ -529,6 +646,33 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
         else
             connectionMsg = ""
         end
+    end
+
+    -- Build the fixed set of "Recent" slots. radio_button does not observe a
+    -- bound title, so the label is a separate static_text (which does). Each
+    -- row's visibility is bound to the loaded recent list; selection is tracked
+    -- by slot index via wp_recentChoice.
+    local recentColumn = { spacing = f:control_spacing() }
+    for i = 1, RECENT_COUNT do
+        recentColumn[#recentColumn + 1] = f:row {
+            spacing = f:label_spacing(),
+            visible = LrView.bind {
+                key = "wp_recentPosts",
+                transform = function(j) return recentCountAtLeast(j, i) end,
+            },
+            f:radio_button {
+                title         = "",
+                value         = LrView.bind "wp_recentChoice",
+                checked_value = i,
+            },
+            f:static_text {
+                title          = LrView.bind {
+                    key = "wp_recentPosts",
+                    transform = function(j) return recentRadioLabel(j, i) end,
+                },
+                width_in_chars = 45,
+            },
+        }
     end
 
     return {
@@ -658,6 +802,13 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     checked_value = "existing",
                 },
             },
+
+            -- Both sub-sections share one overlapping region so the hidden
+            -- one does not reserve vertical space (LrView keeps the layout of
+            -- views with visible=false), which otherwise leaves a large gap.
+            f:view {
+            place = "overlapping",
+            fill_horizontal = 1,
 
             -- New Post sub-section
             f:group_box {
@@ -837,9 +988,35 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
 
                 f:row {
                     f:static_text {
+                        title     = "Recent:",
+                        alignment = "left",
+                        width     = 60,
+                    },
+                    f:column(recentColumn),
+                },
+
+                f:static_text {
+                    title   = LrView.bind {
+                        key = "wp_recentPosts",
+                        transform = function(j)
+                            if recentCountAtLeast(j, 1) then return "" end
+                            if not j or j == "" then return "(loading recent posts…)" end
+                            return "(no recent posts)"
+                        end,
+                    },
+                    visible = LrView.bind {
+                        key = "wp_recentPosts",
+                        transform = function(j) return not recentCountAtLeast(j, 1) end,
+                    },
+                },
+
+                f:separator { fill_horizontal = 1 },
+
+                f:row {
+                    f:static_text {
                         title     = "Search:",
-                        alignment = "right",
-                        width     = LrView.share "label_width",
+                        alignment = "left",
+                        width     = 60,
                     },
                     f:edit_field {
                         value         = LrView.bind "wp_searchQuery",
@@ -887,8 +1064,8 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                 f:row {
                     f:static_text {
                         title     = "Result:",
-                        alignment = "right",
-                        width     = LrView.share "label_width",
+                        alignment = "left",
+                        width     = 60,
                     },
                     f:popup_menu {
                         value = LrView.bind "wp_selectedPostId",
@@ -903,7 +1080,7 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                 f:row {
                     f:static_text {
                         title     = "",
-                        width     = LrView.share "label_width",
+                        width     = 60,
                     },
                     f:static_text {
                         title = LrView.bind "wp_selectedPostInfo",
@@ -913,8 +1090,8 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                 f:row {
                     f:static_text {
                         title     = "Status:",
-                        alignment = "right",
-                        width     = LrView.share "label_width",
+                        alignment = "left",
+                        width     = 60,
                     },
                     f:popup_menu {
                         value = LrView.bind "wp_existingStatus",
@@ -927,6 +1104,8 @@ function exportServiceProvider.sectionsForTopOfDialog(f, propertyTable)
                     },
                 },
             },
+
+            }, -- end overlapping view
         },
 
         ---------------------
@@ -1079,26 +1258,21 @@ function exportServiceProvider.processRenderedPhotos(functionContext, exportCont
             return
         end
 
-        -- Determine rest_base from search results
-        local resultsJson = exportSettings.wp_searchResults
-        local results = Utils.jsonDecode(resultsJson) or {}
+        -- The selected post may come from the Recent radio list or from Search.
         postRestBase = "posts"
-
-        for _, r in ipairs(results) do
-            if r.id == postId then
-                postTypeSlug = r.typeSlug or "post"
-                -- Look up rest_base from post types
-                local postTypesJson = exportSettings.wp_postTypes
-                local postTypes = Utils.jsonDecode(postTypesJson) or {}
-                for _, pt in ipairs(postTypes) do
-                    if pt.value == r.typeSlug then
-                        postRestBase = pt.restBase
-                        break
-                    end
+        local r = findPostInJson(exportSettings.wp_recentPosts, postId)
+                 or findPostInJson(exportSettings.wp_searchResults, postId)
+        if r then
+            postTypeSlug = r.typeSlug or "post"
+            -- Look up rest_base from post types
+            local postTypes = Utils.jsonDecode(exportSettings.wp_postTypes) or {}
+            for _, pt in ipairs(postTypes) do
+                if pt.value == r.typeSlug then
+                    postRestBase = pt.restBase
+                    break
                 end
-                postTitle = r.title or ""
-                break
             end
+            postTitle = r.title or ""
         end
 
         -- Get max existing menu_order for correct append position

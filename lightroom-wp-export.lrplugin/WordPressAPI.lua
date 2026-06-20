@@ -169,12 +169,33 @@ end
 -- Search Posts
 --------------------------------------------------------------------------------
 
+-- Include drafts and other non-published statuses. context=edit guarantees the
+-- REST API returns protected statuses (the app-password user owns the posts).
+local ALL_STATUSES = "&status=publish,draft,pending,future,private&context=edit"
+
+--- Build a result table from a REST post, matching the shape used everywhere.
+local function postToResult(post, typeName)
+    local title = ""
+    if post.title and post.title.rendered then
+        title = post.title.rendered
+    end
+    return {
+        id       = post.id,
+        title    = title,
+        status   = post.status or "unknown",
+        typeName = typeName,
+        typeSlug = post.type,
+        modified = post.modified or "",
+    }
+end
+
 --- Search posts across a specific post type. Returns array of result tables.
 local function searchByType(siteUrl, username, appPassword, restBase, typeName, query)
     local path = "/wp/v2/" .. restBase
                  .. "?search=" .. Utils.urlEncode(query)
                  .. "&per_page=10"
-                 .. "&_fields=id,title,status,type"
+                 .. ALL_STATUSES
+                 .. "&_fields=id,title,status,type,modified"
     local data, err = WordPressAPI.apiGet(siteUrl, path, username, appPassword)
     if not data then
         return {}
@@ -182,17 +203,7 @@ local function searchByType(siteUrl, username, appPassword, restBase, typeName, 
 
     local results = {}
     for _, post in ipairs(data) do
-        local title = ""
-        if post.title and post.title.rendered then
-            title = post.title.rendered
-        end
-        results[#results + 1] = {
-            id       = post.id,
-            title    = title,
-            status   = post.status or "unknown",
-            typeName = typeName,
-            typeSlug = post.type,
-        }
+        results[#results + 1] = postToResult(post, typeName)
     end
     return results
 end
@@ -249,6 +260,48 @@ function WordPressAPI.searchPosts(siteUrl, username, appPassword, query, postTyp
     end
 
     logger:trace("Search '" .. query .. "' found " .. #allResults .. " results")
+    return allResults
+end
+
+--- Fetch the most recently modified posts across all post types.
+--- Returns up to `count` results (same shape as searchPosts) sorted newest-first.
+function WordPressAPI.getRecentPosts(siteUrl, username, appPassword, postTypes, count)
+    count = count or 5
+
+    local allResults = {}
+
+    for _, pt in ipairs(postTypes) do
+        local path = "/wp/v2/" .. pt.restBase
+                     .. "?orderby=modified&order=desc"
+                     .. "&per_page=" .. count
+                     .. ALL_STATUSES
+                     .. "&_fields=id,title,status,type,modified"
+        local data = WordPressAPI.apiGet(siteUrl, path, username, appPassword)
+        if data then
+            for _, post in ipairs(data) do
+                allResults[#allResults + 1] = postToResult(post, pt.title)
+            end
+        end
+    end
+
+    -- Sort newest-first across all types (ISO 8601 strings sort lexically).
+    table.sort(allResults, function(a, b)
+        return (a.modified or "") > (b.modified or "")
+    end)
+
+    -- Truncate to the requested count.
+    while #allResults > count do
+        table.remove(allResults)
+    end
+
+    -- Fetch attachment count for each result.
+    for _, r in ipairs(allResults) do
+        r.attachmentCount = WordPressAPI.getAttachmentCount(
+            siteUrl, username, appPassword, r.id
+        )
+    end
+
+    logger:trace("Fetched " .. #allResults .. " recent posts")
     return allResults
 end
 
